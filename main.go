@@ -86,6 +86,7 @@ type Plugin struct {
 func (p *Plugin) Report(w http.ResponseWriter, r *http.Request) {
 	var Spec spec
 	log.Println(r.URL.String())
+
 	// Check we can get the bosh /var/vcap/bosh/spec.json
 	//Read /var/vcap/bosh/spec.json
 	specFile, err := ioutil.ReadFile("./example-spec.json")
