@@ -25,10 +25,12 @@ func setupSignals(socketPath string) {
 
 func setupSocket(socketPath string) (net.Listener, error) {
 	os.RemoveAll(filepath.Dir(socketPath))
+	fmt.Printf("[Scope-Bosh-Plugin] Attempting to create socket at %v:", socketPath)
 	err := os.MkdirAll(filepath.Dir(socketPath), 0700)
 	if err != nil {
 		return nil, fmt.Errorf("[Scope-Bosh-Plugin] Failed to create directory %q: %v", filepath.Dir(socketPath), err)
 	}
+	fmt.Printf("[Scope-Bosh-Plugin] Socket Created at %v:", socketPath)
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		return nil, fmt.Errorf("[Scope-Bosh-Plugin] Failed to listen on %q: %v", socketPath, err)
@@ -36,6 +38,24 @@ func setupSocket(socketPath string) (net.Listener, error) {
 
 	log.Printf("[Scope-Bosh-plugin] Listening on: unix://%s", socketPath)
 	return listener, nil
+}
+
+type Plugin struct {
+	HostID   string
+	boshMode bool
+}
+
+type report struct {
+	Host    spec
+	Plugins []pluginSpec
+}
+
+type pluginSpec struct {
+	ID          string   `json:"id"`
+	Label       string   `json:"label"`
+	Description string   `json:"description,omitempty"`
+	Interfaces  []string `json:"interfaces"`
+	APIVersion  string   `json:"api_version,omitempty"`
 }
 
 type cf_private struct {
@@ -79,22 +99,35 @@ func main() {
 	}
 }
 
-type Plugin struct {
-	HostID string
+func (p *Plugin) Report(w http.ResponseWriter, r *http.Request) {
+	log.Println(r.URL.String())
+	rpt, err := p.makeReport()
+	if err != nil {
+		log.Printf("[Scope-Bosh-Plugin]Error making report: %v\n", err)
+		return
+	}
+
+	response, err := json.Marshal(*rpt)
+	if err != nil {
+		log.Printf("[Scope-Bosh-Plugin Error Marshalling response: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[Scope-Bosh-Plugin] Report Success: %v", response)
+	w.WriteHeader(http.StatusOK)
+	w.Write(response)
 }
 
-func (p *Plugin) Report(w http.ResponseWriter, r *http.Request) {
+func (p *Plugin) makeReport() (*report, error) {
 	var Spec spec
-	log.Println(r.URL.String())
-
 	// Check we can get the bosh /var/vcap/bosh/spec.json
 	//Read /var/vcap/bosh/spec.json
-	specFile, err := ioutil.ReadFile("./example-spec.json")
+	specFile, err := ioutil.ReadFile("/var/vcap/packages/scope/plugins/spec.json")
 	if err != nil {
 		fmt.Printf("Error reading spec.json: %v\n", err)
 		os.Exit(1)
 	}
-
 	//Unmarshall spec.json into spec type
 	err = json.Unmarshal(specFile, &Spec)
 	if err != nil {
@@ -106,14 +139,22 @@ func (p *Plugin) Report(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("Index: %+v\n", Spec.Index)
 	fmt.Printf("Networks: %+v", Spec.Networks)
 
-	response, err := json.Marshal(&Spec)
-	if err != nil {
-		log.Printf("[Scope-Bosh-Plugin Error Marshalling response: %v", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	rpt := &report{
+		Host: spec{
+			Deployment: Spec.Deployment,
+			Index:      Spec.Index,
+			Networks:   Spec.Networks,
+		},
+		Plugins: []pluginSpec{
+			{
+				ID:          "bosh",
+				Label:       "scope-bosh",
+				Description: "Displays information about the bosh deployed VM",
+				Interfaces:  []string{"reporter"},
+				APIVersion:  "1",
+			},
+		},
 	}
 
-	log.Printf("[Scope-Bosh-Plugin] Report Success: %v", response)
-	w.WriteHeader(http.StatusOK)
-	w.Write(response)
+	return rpt, nil
 }
